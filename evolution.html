@@ -1,0 +1,696 @@
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="ru">
+<head>
+<meta http-equiv="Content-Type" content="text/html; charset=UTF-8"/>
+<meta http-equiv="imagetoolbar" content="no" />
+	<title>Evolution and altruism</title>
+
+<style type="text/css">
+	
+	body {
+		background-color: #eee;
+		padding: 0.5em;
+	}
+	
+	
+	#board {
+		border-collapse: collapse;
+	}
+	
+	#board td {
+		border: 1px solid black;
+		padding: 10px;
+	}
+	
+	
+	#controls {
+		float: left;
+		padding: 0.6em 0.6em 1em 0.6em;
+		margin: 0em 1em 1em 0em;
+		background-color: #fefefe;
+	}
+	
+	#controls p {
+		margin: 1em 0.2em 1em 0.2em;
+	}
+	
+	#controls input, #controls select {
+		margin-left: 0.5em;
+	}
+	
+	#controls button {
+		margin: 0.2em;
+	}
+	
+	#controls input, #controls select {
+		float: right;
+		color: #0b3;
+	}
+	
+	#controls .label {
+		clear: left;
+	}
+	
+	#controls .buttons {
+		clear: both;
+		text-align: center;
+		margin-top: 1em;
+	}
+	
+	#controls hr {
+		margin-top: 1em;
+		margin-bottom: 1em;
+	}
+	
+	
+	#palette {
+		list-style: none;
+		margin: 0;
+		padding: 0;
+	}
+	
+	#palette li {
+		margin-top: 0.4em;
+	}
+	
+	#palette span, #brush_indicator {
+		display: inline-block;
+		width: 1em;
+		height: 1em;
+		border: 1px solid black;
+	}
+	
+	#palette span {
+		float: left;
+		margin-right: 0.2em;
+		cursor: pointer;
+	}
+	
+	
+	#board_frame {
+		display: inline-block;
+		text-align: right;
+	}
+	
+	#brush_indicator {
+		float: right;
+		margin: 0.2em;
+	}
+	
+	#counter {
+		font-weight: bold;
+		font-size: 110%;
+		cursor: pointer;
+	}
+	
+	
+	div.collapser {
+		cursor: pointer;
+		text-align: center;
+		font-size: 80%;
+		background-color: #f8f8f8;
+		margin: -1em 0em 0em 0em;
+	}
+</style>
+
+<script type="text/javascript">
+// <![CDATA[
+
+evolution = new function (){// singleton
+
+	var board
+	var param = {}
+	
+	function init (){
+		// all in one
+		board = document.getElementById ('board')
+		init_controls()
+		init_palette()
+		read_params (true)
+		step_counter.init()
+		init_board()
+	}
+	
+	
+	// board ---------------------------------------------------------
+	
+	param.width = null
+	param.height = null
+	
+	function init_board(){
+		// (re)initialize the board
+		while (board.rows.length > 0){
+			board.deleteRow (0)
+		}
+		for (var i=0; i < param.height; ++i){
+			var row = board.insertRow (i)
+			for (var j=0; j < param.width; ++j){
+				var cell = row.insertCell (j)
+				put (cell, 'empty')
+				cell.alt_eggs = 0
+				cell.ego_eggs = 0
+			}
+		}
+		step_counter.reset()
+	}
+	
+	function reverse_colors(){
+		// alt <--> ego
+		var ego = colors['alt']
+		colors['alt'] = colors['ego']
+		colors['ego'] = ego
+		// repaint the board
+		var all_cells = board.getElementsByTagName ('td')
+		for (var i=0; i < all_cells.length; ++i){
+			var cell = all_cells[i]
+			cell.style.backgroundColor = colors [cell.state]
+		}
+		// repaint the palette
+		var palette = document.getElementById ('palette')
+		var brushes = palette.getElementsByTagName ('span')
+		for (var i = 0; i < brushes.length; ++i){
+			var brush = brushes[i]
+			brush.style.backgroundColor = colors [brush.brush_type]
+		}
+		select_brush (current_brush)
+	}
+	
+	var colors = {'empty': '#eee', 'wall': '#000', 'ego': '#f96', 'alt': '#3cf'}
+	
+	function put (cell, new_state){
+		// change the state of a square on the board
+		cell.state = new_state
+		cell.age = 0
+		cell.style.backgroundColor = colors[new_state]
+	}
+	
+	function put_xy (x, y, new_state){
+		// change the state of a square on the board
+		put (board.rows[y].cells[x], new_state)
+	}
+	
+	function cell_by_coords (coords){
+		return board.rows[coords[1]].cells[coords[0]]
+	}
+	
+	function killall (){
+		for (var i=0; i < param.height; ++i){
+			for (var j=0; j < param.width; ++j){
+				var cell = board.rows[i].cells[j]
+				if (cell.state == 'alt' || cell.state == 'ego'){
+					put (cell, 'empty')
+				}
+			}
+		}
+		step_counter.reset()
+	}
+	
+	
+	// evolution ---------------------------------------------------------
+	
+	param.fertility = null
+	param.age_of_fertility = null
+	param.life_exp = null
+	param.ego_renegades = null
+	param.alt_renegades = null
+	
+	
+	function evolve (){
+		// by a single step
+		
+		var mortality = 1. / (param.life_exp + 1.)
+		var n_alive = 0
+		
+		// determine actions
+		for (var i=0; i < param.height; ++i){
+			for (var j=0; j < param.width; ++j){
+				var cell = board.rows[i].cells[j]
+				var state = cell.state
+				if (! (state == 'alt' || state == 'ego')) continue
+				n_alive++
+				if (Math.random() < mortality){ // death
+					put (cell, 'empty')
+					continue
+				}
+				cell.age++
+				if (cell.age <= param.age_of_fertility ||
+					Math.random() > param.fertility) continue // no eggs
+				var egg_position = random_step_from (j, i)
+				if (egg_position === null) continue // obstacle
+				var egg_cell = cell_by_coords (egg_position)
+				if (egg_cell.state == 'wall') continue // obstacle
+				if (state == 'alt'){
+					egg_cell.alt_eggs++
+				} else {
+					egg_cell.ego_eggs++
+				}
+			}
+		}
+		
+		// resolve conflicts
+		for (var i=0; i < param.height; ++i){
+			for (var j=0; j < param.width; ++j){
+				var cell = board.rows[i].cells[j]
+				if (cell.alt_eggs > 0 || cell.ego_eggs > 0){
+					var winner = param.conflict_resolution (cell)
+					if (winner != null){
+						put (cell, child_type (winner))
+					}
+					cell.alt_eggs = 0
+					cell.ego_eggs = 0
+				}
+			}
+		}
+		
+		// meta
+		if (n_alive > 0){
+			step_counter.tick()
+		} else {
+			stop()
+		}
+	}
+	
+	
+	// reproduction ---------------------------------------------------------
+	
+	function child_type (parent_type){
+		switch (parent_type){
+			case 'ego':
+				return (Math.random() < param.ego_renegades)? 'alt' : 'ego'
+			case 'alt':
+				return (Math.random() < param.alt_renegades)? 'ego' : 'alt'
+			default:
+				throw "unknown type"
+		}
+	}
+	
+	param.conflict_resolution = null
+	var resolutions = new Array()
+	
+	resolutions.killer_egg = function (cell){
+		if (cell.ego_eggs > 0) return 'ego'
+		if (cell.alt_eggs > 0 && cell.state == 'empty') return 'alt'
+		return null
+	}
+	resolutions.random = function (cell){
+		var total_eggs = cell.ego_eggs + cell.alt_eggs
+		return (Math.random() * total_eggs > cell.ego_eggs)? 'alt' : 'ego'
+	}
+	
+	
+	// movement ---------------------------------------------------------
+	
+	param.min_radius = null
+	param.max_radius = null
+	
+	function random_step_from (x, y){
+		var r = param.min_radius +
+			Math.random() * (param.max_radius - param.min_radius)
+		var a = Math.random() * 2. * Math.PI
+		var x = x + Math.round (Math.cos (a) * r)
+		var y = y + Math.round (Math.sin (a) * r)
+		if (x < 0 || y < 0 || x >= param.width || y >= param.height) return null
+		return [x, y]
+	}
+	
+	
+	// palette ---------------------------------------------------------
+	
+	var current_brush
+	var mouse_button_pressed = false
+	
+	function init_palette(){
+		// everything necessay for "drawing"
+		var palette = document.getElementById ('palette')
+		var brushes = palette.getElementsByTagName ('span')
+		function brush_onclick (){
+			select_brush (this.brush_type)
+		}
+		for (var i = 0; i < brushes.length; ++i){
+			var brush = brushes[i]
+			var state = brush.id.slice(0, -6)
+			brush.style.backgroundColor = colors[state]
+			brush.title = "press to put on the board"
+			brush.brush_type = state
+			brush.onclick = brush_onclick
+		}
+		board.onclick = function (event){
+			var cell = get_target (event)
+			put (cell, current_brush)
+		}
+		board.onmouseover = function (event){
+			if (mouse_button_pressed){
+				var cell = get_target (event)
+				put (cell, current_brush)
+			}
+		}
+		board.onmousedown = function (event){
+			var cell = get_target (event)
+			put (cell, current_brush)
+			mouse_button_pressed = true
+		}
+		board.onmouseup = function (event){
+			mouse_button_pressed = false
+		}
+		select_brush ('wall')
+	}
+	
+	function select_brush (brush){
+		current_brush = brush
+		var indicator = document.getElementById ('brush_indicator')
+		indicator.style.backgroundColor = colors [current_brush]
+	}
+	
+	function get_target (event){
+		// cross-browser solution by quirksmode.org
+		var target;
+		if (!event) var event = window.event;
+		if (event.target){
+			target = event.target
+		} else if (event.srcElement) {
+			target = event.srcElement
+		} else {
+			throw "can't get the event target"
+		}
+		if (target.nodeType == 3) return target.parentNode;
+		return target
+	}
+	
+	
+	// other controls ---------------------------------------------------------
+	
+	var require_reset = {'width': true, 'length': true}
+	var fields
+	var unread_field_color
+	var read_field_color = "#000"
+	var invalid_field_color = "red"
+	
+	function init_controls (){
+		// hook up the buttons and input fields
+		fields = new Array()
+		var forms = ['run_params', 'board_params', 'evolve_params', 'evolve_params2']
+		for (var i = 0; i < forms.length; ++i){
+			var form = document.getElementById (forms[i])
+			form.onreset = on_form_reset
+			for (var j=0; j<2; ++j){
+				var collection = form.getElementsByTagName (['input', 'select'][j])
+				for (var k = 0; k < collection.length; ++k){
+					fields.push (collection[k])
+				}
+			}
+		}
+		unread_field_color = fields[0].style.color
+		for (var i = 0; i < fields.length; ++i){
+			var field = fields[i]
+			field.onchange = validate_input
+		}
+	}
+	
+	function validate_input (){
+		// onchange event handler
+		switch (this.className){
+			case 'natural':
+				var value = parseInt (this.value)
+				if  (value != this.value || !(value > 0) || value > 9000){
+					value = null
+				}
+				break
+			case 'nonnegative':
+				var value = parseFloat (this.value)
+				if  (value != this.value || !(value >= 0.) || (value > 9000.)){
+					value = null
+				}
+				break
+			case 'probability':
+				var value = parseFloat (this.value)
+				if  (value != this.value || !(value >= 0.) || value > 1.){
+					value = null
+				}
+				break
+			case 'resolution':
+				var value = resolutions [this.value]
+				break
+			default:
+				throw "unknown input value type"
+		}
+		this.effective_value = value
+		if (value === null){
+			this.style.color = invalid_field_color
+		} else if (value == param[this.name]){
+			this.style.color = read_field_color
+		} else {
+			this.style.color = unread_field_color
+		}
+	}
+	
+	function validate_all (form){
+		for (var i=0; i < 2; ++i){
+			var form_fields = form.getElementsByTagName(['input', 'select'][i])
+			for (var j = 0; j < form_fields.length; ++j){
+				form_fields[j].onchange.apply (form_fields[j])
+			}
+		}
+	}
+	
+	function on_form_reset (){
+		var that = this
+		setTimeout (function() {validate_all (that)}, 100)
+	}
+	
+	function read_params (all){
+		// input fields -> script variables
+		if (typeof(all) === 'undefined') all = false
+		stop()
+		for (var i = 0; i < fields.length; ++i){
+			var field = fields[i]
+			field.onchange.apply (field)
+			if (all || !require_reset.hasOwnProperty (field.name)){
+				if (field.effective_value === null){
+					alert ("в полях ввода что-то не так")
+					throw "invalid value in " + field.name + " field"
+				}
+				param [field.name] = field.effective_value
+				field.style.color = read_field_color
+			}
+		}
+	}
+	
+	
+	// running ---------------------------------------------------------
+	
+	var timer = null
+	param.interval = null
+	
+	function run(){
+		if (timer === null){
+			timer = setInterval (evolve, param.interval)
+		}
+	}
+	
+	function stop(){
+		if (timer != null){
+			clearInterval (timer)
+			timer = null
+		}
+	}
+	
+	
+	var step_counter = new function (){// singleton
+	
+		var display
+		var count
+		
+		this.init = function (){
+			count = 0
+			display = document.getElementById ('counter')
+			display.onclick = this.reset
+			display.title = "reset"
+		}
+		
+		this.tick = function (){
+			count++
+			display.innerHTML = count.toString()
+		}
+		
+		this.reset = function (){
+			count = 0
+			display.innerHTML = "0"
+		}
+	}
+	
+	
+	// using ---------------------------------------------------------
+	
+	var public_members = ['init', 'init_board', 'read_params', 'evolve', 'run',
+		'stop', 'killall', 'reverse_colors', 'param']
+	
+	for (var i=0; i < public_members.length; ++i){
+		var name = public_members[i]
+		this [name] = eval (name)
+	}
+	
+}
+
+
+
+function init_collapsers (){
+	// run this to turn every element of 'collapser' class into a
+	// visibility switch for its next sibling
+	var collection = document.getElementsByClassName ('collapser')
+	
+	function on_click (){
+		this.collapsed = !this.collapsed
+		var next = this.nextElementSibling
+		if (this.collapsed) {
+			this.title = "show"
+			this.innerHTML = "◡"
+			this.display_type = next.style.display
+			next.style.display = "none"
+		} else {
+			this.title = "hide"
+			this.innerHTML = "◠"
+			next.style.display = this.display_type
+		}
+	}
+	
+	for (var i = 0; i < collection.length; ++i){
+		var collapser = collection[i]
+		collapser.onclick = on_click
+		collapser.collapsed = false
+		switch (collapser.innerHTML){
+			case "◠":
+				collapser.title = "hide"
+				break
+			case "◡":
+				on_click.apply (collapser)
+				break
+			default:
+				throw "invalid text inside a collapser element: " + collapser.innerHTML
+		}
+	}
+}
+
+// ]]>
+</script>
+
+
+</head>
+<body onload="evolution.init(); init_collapsers()">
+
+<div id='controls'>
+ 
+ <ul id='palette'>
+  <li><span id='empty_brush'></span> empty</li>
+  <li><span id='wall_brush'></span> wall</li>
+  <li><span id='alt_brush'></span> nice guy</li>
+  <li><span id='ego_brush'></span> not nice</li>
+ </ul>
+ <div class='buttons'>
+  <button type='button' onclick="evolution.stop(); evolution.reverse_colors()">vice versa!</button>
+ </div>
+ 
+ <hr/>
+ 
+ <form id='run_params' action="">
+  <p>
+   <span class='label'>Delay:</span>
+   <input type='text' name='interval' value='500' size='3' class='natural' title="ms"/>
+  </p>
+  <div class='buttons'>
+   <button type='button' onclick="evolution.read_params(); evolution.evolve()">Step</button>
+   <button type='button' onclick="evolution.read_params(); evolution.run()">Run</button>
+   <button type='button' onclick="evolution.stop()">Stop</button>
+   <br/>
+   <button type='reset'>Defaults</button>
+   <button type='button' onclick="evolution.stop(); evolution.killall()">Kill all</button>
+  </div>
+ </form> 
+ 
+ <hr/>
+
+ <div class='collapser'>◠</div>
+ <form id='board_params' action="">
+  <p>
+   <span class='label'>Width:</span>
+   <input type='text' name='width' value='10' size='2' class='natural' title="squares"/>
+  </p>
+  <p>
+   <span class='label'>Height:</span>
+   <input type='text' name='height' value='10' size='2' class='natural' title="squares"/>
+  </p>
+  <div class='buttons'>
+   <button type='button' onclick="evolution.read_params (true); evolution.init_board()">New board</button>
+   <br/>
+   <button type='reset'>Defaults</button>
+  </div>
+ </form> 
+ 
+ <hr/>
+
+ <div class='collapser'>◡</div>
+ <form id='evolve_params' action="">
+  <p>
+   <span class='label'>Life expectancy:</span>
+   <input type='text' name='life_exp' value='8' size='4' class='nonnegative' title="iterations"/>
+  </p>
+  <p>
+   <span class='label'>Reproductive age:</span>
+   <input type='text' name='age_of_fertility' value='4' size='2' class='natural' title="iteration"/>
+  </p>
+  <p>
+   <span class='label'>Fertility:</span>
+   <input type='text' name='fertility' value='0.35' size='4' class='probability' title="probability"/>
+  </p>
+  <p>
+   <span class='label'>Nice → not nice:</span>
+   <input type='text' name='alt_renegades' value='0.005' size='4' class='probability' title="probability"/>
+  </p>
+  <p>
+   <span class='label'>Not nice → nice:</span>
+   <input type='text' name='ego_renegades' value='0.005' size='4' class='probability' title="probability"/>
+  </p>
+  <div class='buttons'>
+   <button type='reset'>Defaults</button>
+  </div>
+ </form>
+ 
+ <hr/>
+
+ <div class='collapser'>◡</div>
+ <form id='evolve_params2' action="">
+  <p>
+   <span class='label' title="of reproduction">MIN range:</span>
+   <input type='text' name='min_radius' value='0.8' size='3' class='nonnegative' title="squares"/>
+  </p>
+  <p>
+   <span class='label' title="of reproduction">MAX range:</span>
+   <input type='text' name='max_radius' value='1.8' size='3' class='nonnegative' title="squares"/>
+  </p>
+  <p>
+   <span class='label' title="of not being nice">Advantage:</span>
+   <select name='conflict_resolution' class='resolution'>
+    <option value='killer_egg' selected='selected'>maximum</option>
+    <option value='random'>moderate</option>
+   </select>
+  </p>
+  <div class='buttons'>
+   <button type='reset'>Defaults</button>
+  </div>
+ </form>
+</div>
+
+<div id='board_frame'>
+ <table id='board'>
+  <tbody>
+   <tr>
+    <td>Empty</td>
+   </tr>
+  </tbody>
+ </table>
+ <div>
+  iteration <span id='counter'>--</span>; drawing <span id='brush_indicator'></span>
+ </div>
+</div>
+
+</body>
+</html>
